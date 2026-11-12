@@ -18,7 +18,7 @@ Application de gestion des examens et des surveillances de l'Institut Préparato
 ## Fonctionnement
 - Chaque saisie est enregistrée automatiquement et immédiatement dans la base en ligne ; les autres utilisateurs la voient en quelques secondes.
 - Accès aux données uniquement après connexion (e-mail + mot de passe), vérifiée par le serveur ; sessions de 12 h ; verrouillage 15 min après 5 échecs.
-- Suppressions = mise en corbeille dans la base ; historique des versions conservé 90 jours.
+- Suppressions = mise en corbeille dans la base ; historique de toutes les versions conservé sans limite de durée (jamais effacé).
 - Hors connexion : les saisies sont gardées et envoyées au retour du réseau.
 
 ## Mise à jour du site

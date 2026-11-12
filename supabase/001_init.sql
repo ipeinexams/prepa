@@ -77,7 +77,6 @@ begin
   insert into ipein_docs (path, body, deleted, updated_at) values (p_path, p_body, false, clock_timestamp())
     on conflict (path) do update set body = excluded.body, deleted = false, updated_at = clock_timestamp();
   insert into ipein_history (path, body, deleted) values (p_path, p_body, false);
-  if random() < 0.01 then delete from ipein_history where at < now() - interval '90 days'; end if;
 end $$;
 
 create or replace function public.ipein_del(p_token text, p_path text) returns void
