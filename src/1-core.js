@@ -38,7 +38,14 @@ const fullName = (u) => (u ? `${u.last_name || ''} ${u.first_name || ''}`.trim()
 const initials = (u) => `${(u.first_name || ' ')[0]}${(u.last_name || ' ')[0]}`.toUpperCase();
 const num = (v) => (v === '' || v === null || v === undefined ? null : Number(v));
 
-const ROLE = { admin: 'Administrateur', responsable: 'Responsable des examens', enseignant: 'Enseignant' };
+const ROLE = { admin: 'Administrateur', responsable: 'Responsable des examens', enseignant: 'Enseignant', personnel: 'Personnel (sans compte)' };
+/* Catégories de personnel, sexe et diplômes (valeurs enregistrées telles quelles) */
+const CATEGORIES = { enseignant: 'Enseignant', administration: 'Administration', technique: 'Équipe technique', ouvrier: 'Ouvrier' };
+const GENDERS = { homme: 'Homme', femme: 'Femme' };
+const DIPLOMAS = { doctorat: 'Doctorat', master: 'Master', ingenieur: 'Diplôme d’ingénieur', licence: 'Licence', bac_plus_2: 'Bac + 2', baccalaureat: 'Baccalauréat', cap_bep: 'CAP / BEP', sans_diplome: 'Sans diplôme', autre: 'Autre' };
+const labelOf = (map, k) => (k && map[k]) || '—';
+/* Catégorie déduite du rôle quand la fiche n'en a pas encore */
+const defaultCategory = (u) => (u.role === 'enseignant' ? 'enseignant' : u.role === 'personnel' ? 'technique' : 'administration');
 const STATUS = {
   brouillon: 'Brouillon', choix_ouverts: 'Choix ouverts', choix_clos: 'Choix clos', publie: 'Publié',
   planifie: 'Planifié', modifie: 'Modifié', annule: 'Annulé', effectue: 'Effectué',

@@ -59,11 +59,26 @@ function examLine(x) {
   return { need, got, rooms: ers.map((r) => get('rooms', r.room_id).code).join(', ') };
 }
 function stepsHtml(steps, idx) { return `<ol class="steps">${steps.map((t, i) => `<li class="${i < idx ? 'done' : i === idx ? 'current' : ''}"><span class="n">${i < idx ? '✓' : i + 1}</span>${e(t)}</li>`).join('')}</ol>`; }
+/* Bloc « Personnel » du tableau de bord : totaux par catégorie, sexe, puis liste triable */
+function personnelBlock() {
+  const people = DB.users;
+  const cat = (u) => u.category || defaultCategory(u);
+  const n = (f) => people.filter(f).length;
+  const kp = `<div class="kpis">${kpi('Personnel', people.length, `${n((u) => u.active)} actif(s)`, 'ok')}${Object.entries(CATEGORIES).map(([k, t]) => kpi(t, n((u) => cat(u) === k), '', '')).join('')}${kpi('Femmes', n((u) => u.gender === 'femme'), `Hommes : ${n((u) => u.gender === 'homme')}`, '')}</div>`;
+  const l = listing(people.slice(), { sorts: { categorie: (u) => cat(u), nom: (u) => fullName(u), sexe: (u) => u.gender || '', diplome: (u) => labelOf(DIPLOMAS, u.diploma), entree: (u) => u.entry_date || '' }, defaultSort: 'categorie', perPage: 10 });
+  const body = l.rows.length
+    ? table([sortLink(l, 'nom', 'Nom'), sortLink(l, 'categorie', 'Catégorie'), 'Grade', sortLink(l, 'sexe', 'Sexe'), sortLink(l, 'diplome', 'Diplôme'), sortLink(l, 'entree', 'Date d’entrée'), 'Département'],
+      l.rows.map((u) => `<tr>${td('Nom', `<a href="#/utilisateurs/${u.id}"><strong>${e(u.last_name)}</strong> ${e(u.first_name)}</a>`)}${td('Catégorie', e(CATEGORIES[cat(u)]))}${td('Grade', e(u.grade || '—'))}${td('Sexe', e(labelOf(GENDERS, u.gender)))}${td('Diplôme', e(labelOf(DIPLOMAS, u.diploma)))}${td('Date d’entrée', u.entry_date ? fmtDate(u.entry_date) : '—')}${td('Département', e(u.department || '—'))}</tr>`).join(''))
+      + pager(l)
+    : empty('Aucun personnel enregistré', 'Ajoutez les fiches ou importez la liste du personnel.', 'users', { href: '#/imports?type=personnel', label: 'Importer le personnel' });
+  return kp + card('Personnel par catégorie', body, { tight: true, right: '<a href="#/utilisateurs">Gérer le personnel</a>' });
+}
 function viewDashboard() {
   if (!isStaff()) return viewTeacherHome();
   const sid = Number(R.query.session) || defaultSessionId();
   const st = sid ? stats(sid) : null;
   let html = pageHead('Tableau de bord', `Bonjour ${ME.first_name}, voici l’état de la session.`, st ? `<form data-filter>${sessionSelect(sid)}</form>` : '');
+  html += personnelBlock();
   if (!st) return { title: 'Tableau de bord', html: html + card('', empty('Aucune session d’examens', 'Créez une année universitaire, un semestre puis une session.', 'layers', { href: '#/sessions', label: 'Créer une session' })) };
   const s = st.session;
   const idx = s.status === 'publie' ? 4 : ['brouillon', 'choix_ouverts', 'choix_clos'].indexOf(s.status);
@@ -358,7 +373,7 @@ function viewTirageForm({ id }) {
   const v = t || (preEx ? { session_id: preEx.session_id, exam_id: preEx.id, subject_id: preEx.subject_id } : { session_id: defaultSessionId() });
   const parts = t ? tirageParts(t.id).map((p) => p.user_id) : (preEx && preEx.responsible_id ? [preEx.responsible_id] : []);
   const exams = where('exams', (x) => x.status === 'planifie').map(examFull).sort((a, b) => a.date.localeCompare(b.date));
-  const users = where('users', (u) => u.active).sort((a, b) => fullName(a).localeCompare(fullName(b)));
+  const users = where('users', (u) => u.active && u.role !== 'personnel').sort((a, b) => fullName(a).localeCompare(fullName(b)));
   const html = pageHead(t ? 'Modifier le tirage' : 'Planifier un tirage', t ? 'Toute modification de date, d’horaire ou de lieu est notifiée et demande une nouvelle confirmation.' : '', '', '<a href="#/tirages">Rendez-vous de tirage</a> /')
     + `<form data-form="tirageSave"${t ? ` data-id="${t.id}"` : ''}><div class="grid side">${card('Rendez-vous', `<div class="form-grid">
       ${field('Session', `<select name="session_id" required data-session-select>${DB.sessions.map((s) => opt(s.id, s.name, v.session_id)).join('')}</select>`, { req: true })}

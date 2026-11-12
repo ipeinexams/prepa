@@ -650,7 +650,14 @@ const fullName = (u) => (u ? `${u.last_name || ''} ${u.first_name || ''}`.trim()
 const initials = (u) => `${(u.first_name || ' ')[0]}${(u.last_name || ' ')[0]}`.toUpperCase();
 const num = (v) => (v === '' || v === null || v === undefined ? null : Number(v));
 
-const ROLE = { admin: 'Administrateur', responsable: 'Responsable des examens', enseignant: 'Enseignant' };
+const ROLE = { admin: 'Administrateur', responsable: 'Responsable des examens', enseignant: 'Enseignant', personnel: 'Personnel (sans compte)' };
+/* Catégories de personnel, sexe et diplômes (valeurs enregistrées telles quelles) */
+const CATEGORIES = { enseignant: 'Enseignant', administration: 'Administration', technique: 'Équipe technique', ouvrier: 'Ouvrier' };
+const GENDERS = { homme: 'Homme', femme: 'Femme' };
+const DIPLOMAS = { doctorat: 'Doctorat', master: 'Master', ingenieur: 'Diplôme d’ingénieur', licence: 'Licence', bac_plus_2: 'Bac + 2', baccalaureat: 'Baccalauréat', cap_bep: 'CAP / BEP', sans_diplome: 'Sans diplôme', autre: 'Autre' };
+const labelOf = (map, k) => (k && map[k]) || '—';
+/* Catégorie déduite du rôle quand la fiche n'en a pas encore */
+const defaultCategory = (u) => (u.role === 'enseignant' ? 'enseignant' : u.role === 'personnel' ? 'technique' : 'administration');
 const STATUS = {
   brouillon: 'Brouillon', choix_ouverts: 'Choix ouverts', choix_clos: 'Choix clos', publie: 'Publié',
   planifie: 'Planifié', modifie: 'Modifié', annule: 'Annulé', effectue: 'Effectué',
@@ -1664,11 +1671,26 @@ function examLine(x) {
   return { need, got, rooms: ers.map((r) => get('rooms', r.room_id).code).join(', ') };
 }
 function stepsHtml(steps, idx) { return `<ol class="steps">${steps.map((t, i) => `<li class="${i < idx ? 'done' : i === idx ? 'current' : ''}"><span class="n">${i < idx ? '✓' : i + 1}</span>${e(t)}</li>`).join('')}</ol>`; }
+/* Bloc « Personnel » du tableau de bord : totaux par catégorie, sexe, puis liste triable */
+function personnelBlock() {
+  const people = DB.users;
+  const cat = (u) => u.category || defaultCategory(u);
+  const n = (f) => people.filter(f).length;
+  const kp = `<div class="kpis">${kpi('Personnel', people.length, `${n((u) => u.active)} actif(s)`, 'ok')}${Object.entries(CATEGORIES).map(([k, t]) => kpi(t, n((u) => cat(u) === k), '', '')).join('')}${kpi('Femmes', n((u) => u.gender === 'femme'), `Hommes : ${n((u) => u.gender === 'homme')}`, '')}</div>`;
+  const l = listing(people.slice(), { sorts: { categorie: (u) => cat(u), nom: (u) => fullName(u), sexe: (u) => u.gender || '', diplome: (u) => labelOf(DIPLOMAS, u.diploma), entree: (u) => u.entry_date || '' }, defaultSort: 'categorie', perPage: 10 });
+  const body = l.rows.length
+    ? table([sortLink(l, 'nom', 'Nom'), sortLink(l, 'categorie', 'Catégorie'), 'Grade', sortLink(l, 'sexe', 'Sexe'), sortLink(l, 'diplome', 'Diplôme'), sortLink(l, 'entree', 'Date d’entrée'), 'Département'],
+      l.rows.map((u) => `<tr>${td('Nom', `<a href="#/utilisateurs/${u.id}"><strong>${e(u.last_name)}</strong> ${e(u.first_name)}</a>`)}${td('Catégorie', e(CATEGORIES[cat(u)]))}${td('Grade', e(u.grade || '—'))}${td('Sexe', e(labelOf(GENDERS, u.gender)))}${td('Diplôme', e(labelOf(DIPLOMAS, u.diploma)))}${td('Date d’entrée', u.entry_date ? fmtDate(u.entry_date) : '—')}${td('Département', e(u.department || '—'))}</tr>`).join(''))
+      + pager(l)
+    : empty('Aucun personnel enregistré', 'Ajoutez les fiches ou importez la liste du personnel.', 'users', { href: '#/imports?type=personnel', label: 'Importer le personnel' });
+  return kp + card('Personnel par catégorie', body, { tight: true, right: '<a href="#/utilisateurs">Gérer le personnel</a>' });
+}
 function viewDashboard() {
   if (!isStaff()) return viewTeacherHome();
   const sid = Number(R.query.session) || defaultSessionId();
   const st = sid ? stats(sid) : null;
   let html = pageHead('Tableau de bord', `Bonjour ${ME.first_name}, voici l’état de la session.`, st ? `<form data-filter>${sessionSelect(sid)}</form>` : '');
+  html += personnelBlock();
   if (!st) return { title: 'Tableau de bord', html: html + card('', empty('Aucune session d’examens', 'Créez une année universitaire, un semestre puis une session.', 'layers', { href: '#/sessions', label: 'Créer une session' })) };
   const s = st.session;
   const idx = s.status === 'publie' ? 4 : ['brouillon', 'choix_ouverts', 'choix_clos'].indexOf(s.status);
@@ -1963,7 +1985,7 @@ function viewTirageForm({ id }) {
   const v = t || (preEx ? { session_id: preEx.session_id, exam_id: preEx.id, subject_id: preEx.subject_id } : { session_id: defaultSessionId() });
   const parts = t ? tirageParts(t.id).map((p) => p.user_id) : (preEx && preEx.responsible_id ? [preEx.responsible_id] : []);
   const exams = where('exams', (x) => x.status === 'planifie').map(examFull).sort((a, b) => a.date.localeCompare(b.date));
-  const users = where('users', (u) => u.active).sort((a, b) => fullName(a).localeCompare(fullName(b)));
+  const users = where('users', (u) => u.active && u.role !== 'personnel').sort((a, b) => fullName(a).localeCompare(fullName(b)));
   const html = pageHead(t ? 'Modifier le tirage' : 'Planifier un tirage', t ? 'Toute modification de date, d’horaire ou de lieu est notifiée et demande une nouvelle confirmation.' : '', '', '<a href="#/tirages">Rendez-vous de tirage</a> /')
     + `<form data-form="tirageSave"${t ? ` data-id="${t.id}"` : ''}><div class="grid side">${card('Rendez-vous', `<div class="form-grid">
       ${field('Session', `<select name="session_id" required data-session-select>${DB.sessions.map((s) => opt(s.id, s.name, v.session_id)).join('')}</select>`, { req: true })}
@@ -2197,7 +2219,7 @@ function viewAnnouncements() {
   const form = staff ? card(edit ? 'Modifier l’annonce' : 'Nouvelle annonce', `<form data-form="annSave"${edit ? ` data-id="${edit.id}"` : ''}>${field('Titre', inp('title', v.title, 'required maxlength="150"'), { req: true })}<div style="margin-top:12px">${field('Contenu', `<textarea name="body" required maxlength="5000" style="min-height:150px">${e(v.body || '')}</textarea>`, { req: true })}</div><div class="form-grid" style="margin-top:12px">${field('Destinataires', `<select name="audience">${Object.entries(AUD).map(([k, t]) => opt(k, t, v.audience)).join('')}</select>`)}${field('Expire le', inp('expires_at', v.expires_at, 'type="date"'))}</div><label class="check" style="margin-top:12px"><input type="checkbox" name="pinned"${v.pinned ? ' checked' : ''}> Épingler en tête</label><div class="form-actions">${edit ? '<a class="btn secondary" href="#/annonces">Annuler</a>' : ''}<button class="btn" type="submit">${edit ? 'Enregistrer' : 'Publier'}</button></div></form>`) : '';
   return { title: 'Annonces', html: pageHead('Annonces', 'Messages et annonces administratives du service des examens.') + `<div class="${staff ? 'grid side' : ''}">${card('', list, { tight: true })}${form}</div>` };
 }
-const recipientsFor = (u) => where('users', (x) => x.active && x.id !== u.id && (isStaff(u) || x.role !== 'enseignant')).sort((a, b) => fullName(a).localeCompare(fullName(b)));
+const recipientsFor = (u) => where('users', (x) => x.active && x.id !== u.id && x.role !== 'personnel' && (isStaff(u) || x.role !== 'enseignant')).sort((a, b) => fullName(a).localeCompare(fullName(b)));
 function viewMessages() {
   const box = R.query.boite === 'envoyes' ? 'envoyes' : 'reception';
   const rows = DB.messages.filter((m) => (box === 'reception' ? m.recipient_id === ME.id : m.sender_id === ME.id));
@@ -2237,11 +2259,14 @@ function viewUsers() {
   if (q.statut === 'actif') rows = rows.filter((u) => u.active);
   if (q.statut === 'inactif') rows = rows.filter((u) => !u.active);
   if (q.departement) rows = rows.filter((u) => u.department === q.departement);
+  if (q.categorie) rows = rows.filter((u) => (u.category || defaultCategory(u)) === q.categorie);
+  if (q.sexe) rows = rows.filter((u) => u.gender === q.sexe);
+  if (q.diplome) rows = rows.filter((u) => u.diploma === q.diplome);
   const depts = [...new Set(DB.users.map((u) => u.department).filter(Boolean))].sort();
-  const l = listing(rows, { search: (u) => `${fullName(u)} ${u.email} ${u.department || ''}`, sorts: { nom: (u) => fullName(u), email: (u) => u.email, role: (u) => u.role, departement: (u) => u.department || '', connexion: (u) => u.last_login_at || '' }, defaultSort: 'nom' });
-  const html = pageHead('Utilisateurs et enseignants', 'Comptes, rôles, quotas et coordonnées.', `<button class="btn secondary" type="button" data-act="exportData" data-key="enseignants" data-format="xlsx">${icon('download')}Exporter les enseignants</button><a class="btn secondary" href="#/imports?type=enseignants">${icon('upload')}Importer</a><a class="btn" href="#/utilisateurs/nouveau">${icon('plus')}Nouvel utilisateur</a>`)
-    + `<div class="card">${toolbar(`${searchBox('Nom, e-mail, département…')}<div class="field"><label>Rôle<select name="role" data-autosubmit>${opt('', 'Tous', q.role)}${Object.entries(ROLE).map(([k, v]) => opt(k, v, q.role)).join('')}</select></label></div><div class="field"><label>Département<select name="departement" data-autosubmit>${opt('', 'Tous', q.departement)}${depts.map((d) => opt(d, d, q.departement)).join('')}</select></label></div><div class="field"><label>Statut<select name="statut" data-autosubmit>${opt('', 'Tous', q.statut)}${opt('actif', 'Actifs', q.statut)}${opt('inactif', 'Désactivés', q.statut)}</select></label></div>`)}
-    <div class="card-body tight">${l.rows.length ? table([sortLink(l, 'nom', 'Nom'), sortLink(l, 'email', 'E-mail'), sortLink(l, 'role', 'Rôle'), sortLink(l, 'departement', 'Département'), 'Quota', 'Statut', sortLink(l, 'connexion', 'Dernière connexion'), ''], l.rows.map((u) => `<tr>${td('Nom', `<a href="#/utilisateurs/${u.id}"><strong>${e(u.last_name)}</strong> ${e(u.first_name)}</a>${u.grade ? `<span class="sub">${e(u.grade)}</span>` : ''}`)}${td('E-mail', e(u.email))}${td('Rôle', `<span class="badge ${u.role === 'admin' ? 'violet' : u.role === 'responsable' ? 'blue' : 'gray'}">${ROLE[u.role]}</span>`)}${td('Département', e(u.department || '—'))}${td('Quota', u.quota_override ?? 'Par défaut')}${td('Statut', u.active ? '<span class="badge ok">Actif</span>' : '<span class="badge err">Désactivé</span>')}${td('Dernière connexion', fmtDT(u.last_login_at) || 'Jamais')}<td class="actions-cell"><a class="btn sm secondary" href="#/utilisateurs/${u.id}">Détails</a></td></tr>`).join('')) + pager(l) : empty('Aucun utilisateur trouvé', '', 'users')}</div></div>`;
+  const l = listing(rows, { search: (u) => `${fullName(u)} ${u.email || ''} ${u.department || ''} ${u.grade || ''}`, sorts: { nom: (u) => fullName(u), email: (u) => u.email || '', role: (u) => u.role, categorie: (u) => u.category || defaultCategory(u), sexe: (u) => u.gender || '', diplome: (u) => u.diploma || '', entree: (u) => u.entry_date || '', departement: (u) => u.department || '', connexion: (u) => u.last_login_at || '' }, defaultSort: 'nom' });
+  const html = pageHead('Personnel et utilisateurs', 'Enseignants, administration, équipe technique et ouvriers : fiches, grades, diplômes et comptes.', `<button class="btn secondary" type="button" data-act="exportData" data-key="personnel" data-format="xlsx">${icon('download')}Exporter le personnel</button><a class="btn secondary" href="#/imports?type=personnel">${icon('upload')}Importer</a><a class="btn" href="#/utilisateurs/nouveau">${icon('plus')}Nouvelle fiche</a>`)
+    + `<div class="card">${toolbar(`${searchBox('Nom, e-mail, département, grade…')}<div class="field"><label>Catégorie<select name="categorie" data-autosubmit>${opt('', 'Toutes', q.categorie)}${Object.entries(CATEGORIES).map(([k, v]) => opt(k, v, q.categorie)).join('')}</select></label></div><div class="field"><label>Sexe<select name="sexe" data-autosubmit>${opt('', 'Tous', q.sexe)}${Object.entries(GENDERS).map(([k, v]) => opt(k, v, q.sexe)).join('')}</select></label></div><div class="field"><label>Diplôme<select name="diplome" data-autosubmit>${opt('', 'Tous', q.diplome)}${Object.entries(DIPLOMAS).map(([k, v]) => opt(k, v, q.diplome)).join('')}</select></label></div><div class="field"><label>Rôle<select name="role" data-autosubmit>${opt('', 'Tous', q.role)}${Object.entries(ROLE).map(([k, v]) => opt(k, v, q.role)).join('')}</select></label></div><div class="field"><label>Département<select name="departement" data-autosubmit>${opt('', 'Tous', q.departement)}${depts.map((d) => opt(d, d, q.departement)).join('')}</select></label></div><div class="field"><label>Statut<select name="statut" data-autosubmit>${opt('', 'Tous', q.statut)}${opt('actif', 'Actifs', q.statut)}${opt('inactif', 'Désactivés', q.statut)}</select></label></div>`)}
+    <div class="card-body tight">${l.rows.length ? table([sortLink(l, 'nom', 'Nom'), sortLink(l, 'categorie', 'Catégorie'), sortLink(l, 'sexe', 'Sexe'), sortLink(l, 'diplome', 'Diplôme'), sortLink(l, 'entree', 'Date d’entrée'), sortLink(l, 'email', 'E-mail'), sortLink(l, 'role', 'Rôle'), sortLink(l, 'departement', 'Département'), 'Statut', sortLink(l, 'connexion', 'Dernière connexion'), ''], l.rows.map((u) => `<tr>${td('Nom', `<a href="#/utilisateurs/${u.id}"><strong>${e(u.last_name)}</strong> ${e(u.first_name)}</a>${u.grade ? `<span class="sub">${e(u.grade)}</span>` : ''}`)}${td('Catégorie', e(CATEGORIES[u.category || defaultCategory(u)]))}${td('Sexe', e(labelOf(GENDERS, u.gender)))}${td('Diplôme', e(labelOf(DIPLOMAS, u.diploma)))}${td('Date d’entrée', u.entry_date ? fmtDate(u.entry_date) : '—')}${td('E-mail', e(u.email || '—'))}${td('Rôle', `<span class="badge ${u.role === 'admin' ? 'violet' : u.role === 'responsable' ? 'blue' : u.role === 'personnel' ? 'warn' : 'gray'}">${ROLE[u.role]}</span>`)}${td('Département', e(u.department || '—'))}${td('Statut', u.active ? '<span class="badge ok">Actif</span>' : '<span class="badge err">Désactivé</span>')}${td('Dernière connexion', fmtDT(u.last_login_at) || 'Jamais')}<td class="actions-cell"><a class="btn sm secondary" href="#/utilisateurs/${u.id}">Détails</a></td></tr>`).join('')) + pager(l) : empty('Aucun membre du personnel trouvé', '', 'users')}</div></div>`;
   return { title: 'Utilisateurs', html };
 }
 function viewUserForm({ id }) {
@@ -2253,8 +2278,10 @@ function viewUserForm({ id }) {
   const html = pageHead(u ? 'Modifier l’utilisateur' : 'Nouvel utilisateur', '', '', '<a href="#/utilisateurs">Utilisateurs</a> /')
     + `<div class="card" style="max-width:900px"><div class="card-body"><form data-form="userSave"${u ? ` data-id="${u.id}"` : ''}><div class="form-grid">
       ${field('Nom', inp('last_name', v.last_name, 'required'), { req: true })}${field('Prénom', inp('first_name', v.first_name, 'required'), { req: true })}
-      ${field('E-mail', inp('email', v.email, 'type="email" required'), { req: true })}${field('Rôle', `<select name="role" required>${roles.map(([k, t]) => opt(k, t, v.role)).join('')}</select>`, { req: true })}
-      ${field('Grade', inp('grade', v.grade, 'placeholder="Maître assistant…"'))}${field('Département', inp('department', v.department))}
+      ${field('E-mail', inp('email', v.email, 'type="email"'), { hint: 'Obligatoire pour un compte de connexion ; facultatif pour le personnel sans compte.' })}${field('Rôle', `<select name="role" required>${roles.map(([k, t]) => opt(k, t, v.role)).join('')}</select>`, { req: true, hint: '« Personnel (sans compte) » : fiche seulement, pas de connexion.' })}
+      ${field('Catégorie', `<select name="category">${Object.entries(CATEGORIES).map(([k, t]) => opt(k, t, v.category || defaultCategory(v))).join('')}</select>`, { req: true })}${field('Sexe', `<select name="gender"><option value="">— Non renseigné —</option>${Object.entries(GENDERS).map(([k, t]) => opt(k, t, v.gender)).join('')}</select>`)}
+      ${field('Date d’entrée', inp('entry_date', v.entry_date || '', 'type="date"'), { hint: 'Date d’entrée à l’institut.' })}${field('Diplôme', `<select name="diploma"><option value="">— Non renseigné —</option>${Object.entries(DIPLOMAS).map(([k, t]) => opt(k, t, v.diploma)).join('')}</select>`)}
+      ${field('Grade', inp('grade', v.grade, 'placeholder="Maître assistant, adjoint technique…"'))}${field('Département', inp('department', v.department))}
       ${field('Téléphone', inp('phone', v.phone))}${field('Quota personnalisé', inp('quota_override', v.quota_override ?? '', 'type="number" min="0" max="50"'), { hint: 'Vide = quota de la session (décharge, temps partiel…).' })}
       ${u ? '' : field('Mot de passe initial', inp('password', '', 'type="password" minlength="10" autocomplete="new-password"'), { full: true, hint: 'Facultatif : un mot de passe provisoire est généré sinon. Changement exigé à la première connexion.' })}
       <div class="full"><label class="check"><input type="checkbox" name="active"${v.active ? ' checked' : ''}> Compte actif</label></div></div>
@@ -2269,7 +2296,7 @@ function viewUser({ id }) {
   const actions = `<a class="btn secondary" href="#/messages?a=${u.id}">${icon('mail')}Écrire</a>${canManage(u) ? `${act('userReset', `${icon('lock')}Réinitialiser le mot de passe`, { id: u.id }, { cls: 'secondary', confirm: 'Générer un mot de passe provisoire pour ce compte ?' })}<a class="btn" href="#/utilisateurs/${u.id}/modifier">${icon('edit')}Modifier</a>` : ''}${ME.role === 'admin' && u.id !== ME.id ? act('userDelete', `${icon('trash')}Supprimer`, { id: u.id }, { cls: 'danger', danger: true, confirm: 'Supprimer définitivement ce compte ? Préférez la désactivation pour conserver l’historique.' }) : ''}`;
   const html = pageHead(`${e(u.last_name)} ${e(u.first_name)} ${u.active ? '<span class="badge ok">Actif</span>' : '<span class="badge err">Désactivé</span>'}`, `${ROLE[u.role]}${u.grade ? ` · ${u.grade}` : ''}${u.department ? ` · ${u.department}` : ''}`, actions, '<a href="#/utilisateurs">Utilisateurs</a> /')
     + `<div class="grid side">${card('Surveillances', as.length ? table(['Date', 'Horaire', 'Salle', 'Épreuve', 'Session', 'Statut'], as.map((a) => `<tr>${td('Date', fmtDate(a.date))}${td('Horaire', `${fmtTime(a.start_time)}–${fmtTime(a.end_time)}`)}${td('Salle', e(a.room_code))}${td('Épreuve', e(a.subject_name))}${td('Session', e(a.session_name))}${td('Statut', badge(a.status))}</tr>`).join('')) : empty('Aucune surveillance', '', 'clipboard'), { tight: true })}
-    <div>${card('Coordonnées', `<dl class="props"><dt>E-mail</dt><dd>${e(u.email)}</dd><dt>Téléphone</dt><dd>${e(u.phone || '—')}</dd><dt>Quota</dt><dd>${u.quota_override ?? 'Quota de la session'}</dd><dt>Créé le</dt><dd>${fmtDT(u.created_at)}</dd><dt>Connexion</dt><dd>${fmtDT(u.last_login_at) || 'Jamais'}</dd>${u.must_change_password ? '<dt>Sécurité</dt><dd><span class="badge warn">Mot de passe à changer</span></dd>' : ''}${u.locked_until && u.locked_until > nowLocal() ? `<dt>Verrouillage</dt><dd><span class="badge err">Jusqu’à ${fmtDT(u.locked_until)}</span></dd>` : ''}</dl>`)}
+    <div>${card('Coordonnées', `<dl class="props"><dt>Catégorie</dt><dd>${e(CATEGORIES[u.category || defaultCategory(u)])}</dd><dt>Sexe</dt><dd>${e(labelOf(GENDERS, u.gender))}</dd><dt>Diplôme</dt><dd>${e(labelOf(DIPLOMAS, u.diploma))}</dd><dt>Date d’entrée</dt><dd>${u.entry_date ? fmtDate(u.entry_date) : '—'}</dd><dt>E-mail</dt><dd>${e(u.email || '—')}</dd><dt>Téléphone</dt><dd>${e(u.phone || '—')}</dd><dt>Quota</dt><dd>${u.quota_override ?? 'Quota de la session'}</dd><dt>Créé le</dt><dd>${fmtDT(u.created_at)}</dd><dt>Connexion</dt><dd>${fmtDT(u.last_login_at) || 'Jamais'}</dd>${u.must_change_password ? '<dt>Sécurité</dt><dd><span class="badge warn">Mot de passe à changer</span></dd>' : ''}${u.locked_until && u.locked_until > nowLocal() ? `<dt>Verrouillage</dt><dd><span class="badge err">Jusqu’à ${fmtDT(u.locked_until)}</span></dd>` : ''}</dl>`)}
     ${card('Périodes d’absence', `<ul class="list">${leaves.map((l) => `<li><div class="grow">${fmtDate(l.start_date)} → ${fmtDate(l.end_date)}<div class="meta">${e(l.reason || '')}</div></div></li>`).join('') || '<li class="muted">Aucune.</li>'}</ul>`, { tight: true, right: '<a href="#/absences">Gérer</a>' })}
     ${card('Dernières actions', `<ul class="list">${logs.map((l) => `<li style="font-size:.85rem"><div class="grow">${e(l.action.replace(/_/g, ' '))}<div class="meta">${fmtDT(l.created_at)}</div></div></li>`).join('') || '<li class="muted">Aucune.</li>'}</ul>`, { tight: true })}</div></div>`;
   return { title: fullName(u), html };
@@ -2318,6 +2345,8 @@ function viewYear({ id }) {
 /* ---------- Exports ---------- */
 function datasets() {
   return {
+    personnel: { title: 'Personnel', admin: true, columns: [['last_name', 'Nom', 22], ['first_name', 'Prénom', 20], ['categorie_l', 'Catégorie', 20], ['gender_l', 'Sexe', 10], ['diploma_l', 'Diplôme', 22], ['entry_date', 'Date d’entrée', 14], ['grade', 'Grade', 22], ['department', 'Département', 20], ['email', 'E-mail', 30], ['actif', 'Actif', 8]],
+      rows: () => DB.users.slice().sort((a, b) => fullName(a).localeCompare(fullName(b), 'fr')).map((u) => ({ ...u, categorie_l: CATEGORIES[u.category || defaultCategory(u)], gender_l: labelOf(GENDERS, u.gender), diploma_l: labelOf(DIPLOMAS, u.diploma), actif: u.active ? 'oui' : 'non' })) },
     enseignants: { title: 'Enseignants', columns: [['last_name', 'Nom', 22], ['first_name', 'Prénom', 20], ['email', 'E-mail', 32], ['grade', 'Grade', 18], ['department', 'Département', 22], ['phone', 'Téléphone', 16], ['quota_override', 'Quota personnalisé', 12], ['actif', 'Actif', 8]],
       rows: () => where('users', (u) => u.role === 'enseignant').sort((a, b) => fullName(a).localeCompare(fullName(b))).map((u) => ({ ...u, actif: u.active ? 'oui' : 'non' })) },
     utilisateurs: { title: 'Utilisateurs', admin: true, columns: [['last_name', 'Nom', 22], ['first_name', 'Prénom', 20], ['email', 'E-mail', 32], ['role_l', 'Rôle', 22], ['department', 'Département', 20], ['actif', 'Actif', 8], ['last_login_at', 'Dernière connexion', 20]],
@@ -2354,7 +2383,8 @@ function viewExports() {
 
 /* ---------- Imports ---------- */
 const IMPORTS = {
-  enseignants: { label: 'Enseignants', cols: { nom: ['nom', 'last_name'], prenom: ['prenom', 'first_name'], email: ['email', 'e_mail', 'courriel'], grade: ['grade'], departement: ['departement', 'department'], telephone: ['telephone', 'tel', 'phone'], quota: ['quota', 'quota_personnalise'] }, req: ['nom', 'prenom', 'email'], ex: ['Ben Salah', 'Amel', 'amel.bensalah@ipein.rnu.tn', 'Maître assistante', 'Mathématiques', '+216 20 000 000', ''] },
+  enseignants: { label: 'Enseignants', cols: { nom: ['nom', 'last_name'], prenom: ['prenom', 'first_name'], email: ['email', 'e_mail', 'courriel'], grade: ['grade'], departement: ['departement', 'department'], telephone: ['telephone', 'tel', 'phone'], quota: ['quota', 'quota_personnalise'], sexe: ['sexe', 'genre', 'gender'], date_entree: ['date_entree', 'date_d_entree', 'entree'], diplome: ['diplome', 'diploma'] }, req: ['nom', 'prenom', 'email'], ex: ['Ben Salah', 'Amel', 'amel.bensalah@ipein.rnu.tn', 'Maître assistante', 'Mathématiques', '+216 20 000 000', '', 'femme', '01/09/2015', 'Doctorat'] },
+  personnel: { label: 'Personnel (administration, équipe technique, ouvriers)', cols: { nom: ['nom', 'last_name'], prenom: ['prenom', 'first_name'], categorie: ['categorie', 'category', 'type'], sexe: ['sexe', 'genre', 'gender'], date_entree: ['date_entree', 'date_d_entree', 'entree'], diplome: ['diplome', 'diploma'], grade: ['grade', 'fonction'], departement: ['departement', 'department', 'service'], email: ['email', 'e_mail', 'courriel'], telephone: ['telephone', 'tel', 'phone'] }, req: ['nom', 'prenom', 'categorie'], ex: ['Trabelsi', 'Fatma', 'administration', 'femme', '01/09/2015', 'Licence', 'Secrétaire générale', 'Administration', '', '+216 70 000 000'] },
   matieres: { label: 'Matières', cols: { code: ['code'], intitule: ['intitule', 'nom', 'name', 'matiere'], departement: ['departement', 'department'] }, req: ['code', 'intitule'], ex: ['MATH1', 'Analyse 1', 'Mathématiques'] },
   classes: { label: 'Classes', cols: { code: ['code'], intitule: ['intitule', 'nom', 'name', 'classe'], niveau: ['niveau', 'level'], effectif: ['effectif', 'nombre_etudiants', 'student_count'] }, req: ['code', 'intitule', 'effectif'], ex: ['MP1-A', 'Mathématiques-Physique 1re année, groupe A', '1re année', '32'] },
   salles: { label: 'Salles', cols: { code: ['code'], nom: ['nom', 'name', 'salle'], batiment: ['batiment', 'building', 'bloc'], capacite: ['capacite', 'capacity', 'places'] }, req: ['code', 'nom', 'capacite'], ex: ['A12', 'Salle A12', 'Bloc A', '40'] },
@@ -2683,20 +2713,34 @@ const FORMS = {
   userSave(d, f) {
     requireStaff();
     const id = Number(f.dataset.id) || null; const u = id ? get('users', id) : null;
-    const email = reqTxt(d.email, 'E-mail').toLowerCase(); if (!isEmail(email)) fail('Adresse e-mail invalide.');
+    const sansCompte = d.role === 'personnel';
+    const rawEmail = String(d.email || '').trim().toLowerCase();
+    if (!sansCompte && !rawEmail) fail('Adresse e-mail obligatoire pour un compte de connexion.');
+    const email = rawEmail || null; if (email && !isEmail(email)) fail('Adresse e-mail invalide.');
     if (!ROLE[d.role]) fail('Rôle invalide.');
     if (!canManage(u) || !canManage({ role: d.role })) fail('Un responsable ne gère que les comptes enseignants.');
-    if (DB.users.some((x) => x.email === email && x.id !== id)) fail('Cette adresse e-mail est déjà utilisée.');
-    const o = { email, first_name: reqTxt(d.first_name, 'Prénom', 80), last_name: reqTxt(d.last_name, 'Nom', 80), role: d.role, grade: optTxt(d.grade, 80), department: optTxt(d.department, 100), phone: optTxt(d.phone, 30), quota_override: optInt(d.quota_override, 'Quota personnalisé', 0, 50), active: Boolean(d.active) };
+    if (email && DB.users.some((x) => x.email === email && x.id !== id)) fail('Cette adresse e-mail est déjà utilisée.');
+    if (!CATEGORIES[d.category]) fail('Catégorie invalide.');
+    if (d.gender && !GENDERS[d.gender]) fail('Sexe invalide.');
+    if (d.diploma && !DIPLOMAS[d.diploma]) fail('Diplôme invalide.');
+    const entryDate = String(d.entry_date || '').trim();
+    if (entryDate && !/^\d{4}-\d{2}-\d{2}$/.test(entryDate)) fail('Date d’entrée invalide.');
+    const o = { email, first_name: reqTxt(d.first_name, 'Prénom', 80), last_name: reqTxt(d.last_name, 'Nom', 80), role: d.role, category: d.category, gender: d.gender || null, diploma: d.diploma || null, entry_date: entryDate || null, grade: optTxt(d.grade, 80), department: optTxt(d.department, 100), phone: optTxt(d.phone, 30), quota_override: optInt(d.quota_override, 'Quota personnalisé', 0, 50), active: Boolean(d.active) };
     if (u) {
       if (u.id === ME.id && (o.role !== u.role || !o.active)) fail('Vous ne pouvez pas modifier votre propre rôle ni désactiver votre compte.');
       if (u.role === 'admin' && (o.role !== 'admin' || !o.active) && !DB.users.some((x) => x.role === 'admin' && x.active && x.id !== u.id)) fail('Il doit rester au moins un administrateur actif.');
+      // Fiche sans compte qui reçoit un accès : mot de passe provisoire généré une fois
+      let provisoire = null;
+      if (u.role === 'personnel' && !sansCompte) { provisoire = tempPassword(); o.password_hash = hashPassword(provisoire); o.must_change_password = true; }
       tx(() => { Object.assign(u, o, { updated_at: nowLocal() }); audit('utilisateur_modifie', 'user', u.id, { role: o.role, active: o.active }); });
+      if (provisoire) return go(`/utilisateurs/${u.id}`, `Compte de connexion créé. Mot de passe provisoire (affiché une seule fois) : ${provisoire}`, 'warning');
       return go(`/utilisateurs/${u.id}`, 'Utilisateur mis à jour.');
     }
-    let pwd = d.password ? String(d.password) : null;
-    if (pwd) checkPasswordRule(pwd); else pwd = tempPassword();
-    const nu = tx(() => { const x = ins('users', { ...o, password_hash: hashPassword(pwd), must_change_password: true, failed_logins: 0, locked_until: null, last_login_at: null, is_demo: false }); audit('utilisateur_cree', 'user', x.id, { email, role: o.role }); notify(x.id, { title: 'Bienvenue sur IPEIN Examens', body: 'Votre compte a été créé. Changez votre mot de passe provisoire à la première connexion.', kind: 'compte' }); return x; });
+    // Personnel sans compte : fiche seulement, aucun mot de passe ni connexion
+    let pwd = sansCompte ? null : (d.password ? String(d.password) : null);
+    if (!sansCompte) { if (pwd) checkPasswordRule(pwd); else pwd = tempPassword(); }
+    const nu = tx(() => { const x = ins('users', { ...o, password_hash: pwd ? hashPassword(pwd) : '', must_change_password: Boolean(pwd), failed_logins: 0, locked_until: null, last_login_at: null, is_demo: false }); audit('utilisateur_cree', 'user', x.id, { email, role: o.role, category: o.category }); if (pwd) notify(x.id, { title: 'Bienvenue sur IPEIN Examens', body: 'Votre compte a été créé. Changez votre mot de passe provisoire à la première connexion.', kind: 'compte' }); return x; });
+    if (sansCompte) return go(`/utilisateurs/${nu.id}`, 'Fiche du personnel enregistrée (sans compte de connexion).', 'success');
     go(`/utilisateurs/${nu.id}`, d.password ? 'Compte créé.' : `Compte créé. Mot de passe provisoire (à transmettre de manière sécurisée, affiché une seule fois) : ${pwd}`, d.password ? 'success' : 'warning');
   },
   sessionSave(d, f) {
@@ -2987,6 +3031,33 @@ const FORMS = {
 const normH = (s) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
 const xlDate = (v) => { if (/^\d+(\.\d+)?$/.test(v) && Number(v) > 20000) { const d = new Date(Math.round((Number(v) - 25569) * 86400000)); return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`; } const m = String(v).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); return m ? `${m[3]}-${pad(m[2])}-${pad(m[1])}` : v; };
 const xlTime = (v) => { if (/^0?\.\d+$/.test(v)) { const m = Math.round(Number(v) * 1440); return `${pad(Math.floor(m / 60))}:${pad(m % 60)}`; } const m = String(v).replace('h', ':').match(/^(\d{1,2}):?(\d{2})?$/); return m ? `${pad(m[1])}:${m[2] || '00'}` : v; };
+/* Fiches du personnel : valeurs acceptées sous forme de clé (« femme ») ou de libellé (« Femme ») */
+const fromMap = (map, v) => Object.keys(map).find((k) => normH(k) === normH(v) || normH(map[k]) === normH(v));
+function ficheErrors(r, key) {
+  const errs = [];
+  if (r.sexe && !fromMap(GENDERS, r.sexe)) errs.push('sexe invalide (homme ou femme)');
+  if (r.diplome && !fromMap(DIPLOMAS, r.diplome)) errs.push('diplôme inconnu');
+  if (r.date_entree) { r.date_entree = xlDate(r.date_entree); if (!/^\d{4}-\d{2}-\d{2}$/.test(r.date_entree)) errs.push('date d’entrée invalide'); }
+  if (key === 'personnel' && !fromMap(CATEGORIES, r.categorie)) errs.push('catégorie inconnue (enseignant, administration, technique ou ouvrier)');
+  return errs;
+}
+function ficheFields(r) {
+  return {
+    gender: r.sexe ? fromMap(GENDERS, r.sexe) || null : null,
+    diploma: r.diplome ? fromMap(DIPLOMAS, r.diplome) || null : null,
+    entry_date: r.date_entree || null,
+  };
+}
+function upsertPersonnel(r, report, i) {
+  const f = ficheFields(r);
+  const category = fromMap(CATEGORIES, r.categorie);
+  const o = { last_name: r.nom, first_name: r.prenom, grade: r.grade || null, department: r.departement || null, phone: r.telephone || null, category, ...f };
+  let ex = r.email ? DB.users.find((u) => u.email === r.email) : null;
+  if (!ex && !r.email) ex = DB.users.find((u) => !u.email && normH(u.last_name) === normH(r.nom) && normH(u.first_name) === normH(r.prenom) && (u.category || defaultCategory(u)) === category);
+  if (ex) { Object.assign(ex, o, r.email ? { email: r.email } : {}); report[i].result = 'mis à jour'; return; }
+  ins('users', { ...o, email: r.email || null, role: 'personnel', password_hash: '', must_change_password: false, failed_logins: 0, locked_until: null, last_login_at: null, active: true, quota_override: null, is_demo: false });
+  report[i].result = 'créé';
+}
 function runImport(key, matrix, { commit, sessionId }) {
   const type = IMPORTS[key];
   const mapH = (row) => { const idx = {}; const n = row.map(normH); for (const [k, al] of Object.entries(type.cols)) { const i = n.findIndex((h) => al.includes(h)); if (i >= 0) idx[k] = i; } return idx; };
@@ -3001,6 +3072,11 @@ function runImport(key, matrix, { commit, sessionId }) {
   const report = rows.map((r) => {
     const errors = type.req.filter((k) => !r[k]).map((k) => `${k} manquant`);
     if (!errors.length) {
+      if (key === 'personnel' || key === 'enseignants') errors.push(...ficheErrors(r, key));
+      if (key === 'personnel' && r.email) {
+        r.email = r.email.toLowerCase(); if (!isEmail(r.email)) errors.push('e-mail invalide');
+        const other = DB.users.find((u) => u.email === r.email); if (other && other.role !== 'personnel') errors.push('e-mail utilisé par un autre compte');
+      }
       if (key === 'enseignants') {
         r.email = r.email.toLowerCase(); if (!isEmail(r.email)) errors.push('e-mail invalide');
         if (r.quota && !/^\d+$/.test(r.quota)) errors.push('quota invalide');
@@ -3029,9 +3105,10 @@ function runImport(key, matrix, { commit, sessionId }) {
   if (commit && valid) {
     tx(() => {
       plan.forEach((r, i) => {
+        if (key === 'personnel') { upsertPersonnel(r, report, i); return; }
         if (key === 'enseignants') {
           const ex = DB.users.find((u) => u.email === r.email);
-          const o = { last_name: r.nom, first_name: r.prenom, grade: r.grade || null, department: r.departement || null, phone: r.telephone || null, quota_override: r.quota ? Number(r.quota) : null };
+          const o = { last_name: r.nom, first_name: r.prenom, grade: r.grade || null, department: r.departement || null, phone: r.telephone || null, quota_override: r.quota ? Number(r.quota) : null, ...ficheFields(r), category: 'enseignant' };
           if (ex) { Object.assign(ex, o); report[i].result = 'mis à jour'; } else { const p = tempPassword(); ins('users', { ...o, email: r.email, role: 'enseignant', password_hash: hashPassword(p), active: true, must_change_password: true, failed_logins: 0, locked_until: null, last_login_at: null, is_demo: false }); credentials.push({ name: `${r.nom} ${r.prenom}`, email: r.email, password: p }); report[i].result = 'créé'; }
         } else if (['matieres', 'classes', 'salles'].includes(key)) {
           const tbl = { matieres: 'subjects', classes: 'classes', salles: 'rooms' }[key];
@@ -3165,6 +3242,7 @@ const ACTS = {
   annDelete(el) { requireStaff(); tx(() => { rm('announcements', (a) => a.id === Number(el.dataset.id)); audit('annonce_supprimee', 'announcement', Number(el.dataset.id)); }); go('/annonces', 'Annonce supprimée.'); },
   userReset(el) {
     requireStaff(); const u = get('users', el.dataset.id); if (!canManage(u)) fail('Vous ne pouvez pas modifier ce compte.');
+    if (u.role === 'personnel' || !u.email) fail('Cette fiche n’a pas de compte de connexion. Ajoutez un e-mail et un rôle d’accès pour lui en créer un.');
     const p = tempPassword();
     tx(() => { Object.assign(u, { password_hash: hashPassword(p), must_change_password: true, failed_logins: 0, locked_until: null }); audit('mot_de_passe_reinitialise', 'user', u.id); });
     go(`/utilisateurs/${u.id}`, `Mot de passe réinitialisé. Mot de passe provisoire (affiché une seule fois) : ${p}`, 'warning');

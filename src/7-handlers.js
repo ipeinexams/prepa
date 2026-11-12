@@ -162,20 +162,34 @@ const FORMS = {
   userSave(d, f) {
     requireStaff();
     const id = Number(f.dataset.id) || null; const u = id ? get('users', id) : null;
-    const email = reqTxt(d.email, 'E-mail').toLowerCase(); if (!isEmail(email)) fail('Adresse e-mail invalide.');
+    const sansCompte = d.role === 'personnel';
+    const rawEmail = String(d.email || '').trim().toLowerCase();
+    if (!sansCompte && !rawEmail) fail('Adresse e-mail obligatoire pour un compte de connexion.');
+    const email = rawEmail || null; if (email && !isEmail(email)) fail('Adresse e-mail invalide.');
     if (!ROLE[d.role]) fail('Rôle invalide.');
     if (!canManage(u) || !canManage({ role: d.role })) fail('Un responsable ne gère que les comptes enseignants.');
-    if (DB.users.some((x) => x.email === email && x.id !== id)) fail('Cette adresse e-mail est déjà utilisée.');
-    const o = { email, first_name: reqTxt(d.first_name, 'Prénom', 80), last_name: reqTxt(d.last_name, 'Nom', 80), role: d.role, grade: optTxt(d.grade, 80), department: optTxt(d.department, 100), phone: optTxt(d.phone, 30), quota_override: optInt(d.quota_override, 'Quota personnalisé', 0, 50), active: Boolean(d.active) };
+    if (email && DB.users.some((x) => x.email === email && x.id !== id)) fail('Cette adresse e-mail est déjà utilisée.');
+    if (!CATEGORIES[d.category]) fail('Catégorie invalide.');
+    if (d.gender && !GENDERS[d.gender]) fail('Sexe invalide.');
+    if (d.diploma && !DIPLOMAS[d.diploma]) fail('Diplôme invalide.');
+    const entryDate = String(d.entry_date || '').trim();
+    if (entryDate && !/^\d{4}-\d{2}-\d{2}$/.test(entryDate)) fail('Date d’entrée invalide.');
+    const o = { email, first_name: reqTxt(d.first_name, 'Prénom', 80), last_name: reqTxt(d.last_name, 'Nom', 80), role: d.role, category: d.category, gender: d.gender || null, diploma: d.diploma || null, entry_date: entryDate || null, grade: optTxt(d.grade, 80), department: optTxt(d.department, 100), phone: optTxt(d.phone, 30), quota_override: optInt(d.quota_override, 'Quota personnalisé', 0, 50), active: Boolean(d.active) };
     if (u) {
       if (u.id === ME.id && (o.role !== u.role || !o.active)) fail('Vous ne pouvez pas modifier votre propre rôle ni désactiver votre compte.');
       if (u.role === 'admin' && (o.role !== 'admin' || !o.active) && !DB.users.some((x) => x.role === 'admin' && x.active && x.id !== u.id)) fail('Il doit rester au moins un administrateur actif.');
+      // Fiche sans compte qui reçoit un accès : mot de passe provisoire généré une fois
+      let provisoire = null;
+      if (u.role === 'personnel' && !sansCompte) { provisoire = tempPassword(); o.password_hash = hashPassword(provisoire); o.must_change_password = true; }
       tx(() => { Object.assign(u, o, { updated_at: nowLocal() }); audit('utilisateur_modifie', 'user', u.id, { role: o.role, active: o.active }); });
+      if (provisoire) return go(`/utilisateurs/${u.id}`, `Compte de connexion créé. Mot de passe provisoire (affiché une seule fois) : ${provisoire}`, 'warning');
       return go(`/utilisateurs/${u.id}`, 'Utilisateur mis à jour.');
     }
-    let pwd = d.password ? String(d.password) : null;
-    if (pwd) checkPasswordRule(pwd); else pwd = tempPassword();
-    const nu = tx(() => { const x = ins('users', { ...o, password_hash: hashPassword(pwd), must_change_password: true, failed_logins: 0, locked_until: null, last_login_at: null, is_demo: false }); audit('utilisateur_cree', 'user', x.id, { email, role: o.role }); notify(x.id, { title: 'Bienvenue sur IPEIN Examens', body: 'Votre compte a été créé. Changez votre mot de passe provisoire à la première connexion.', kind: 'compte' }); return x; });
+    // Personnel sans compte : fiche seulement, aucun mot de passe ni connexion
+    let pwd = sansCompte ? null : (d.password ? String(d.password) : null);
+    if (!sansCompte) { if (pwd) checkPasswordRule(pwd); else pwd = tempPassword(); }
+    const nu = tx(() => { const x = ins('users', { ...o, password_hash: pwd ? hashPassword(pwd) : '', must_change_password: Boolean(pwd), failed_logins: 0, locked_until: null, last_login_at: null, is_demo: false }); audit('utilisateur_cree', 'user', x.id, { email, role: o.role, category: o.category }); if (pwd) notify(x.id, { title: 'Bienvenue sur IPEIN Examens', body: 'Votre compte a été créé. Changez votre mot de passe provisoire à la première connexion.', kind: 'compte' }); return x; });
+    if (sansCompte) return go(`/utilisateurs/${nu.id}`, 'Fiche du personnel enregistrée (sans compte de connexion).', 'success');
     go(`/utilisateurs/${nu.id}`, d.password ? 'Compte créé.' : `Compte créé. Mot de passe provisoire (à transmettre de manière sécurisée, affiché une seule fois) : ${pwd}`, d.password ? 'success' : 'warning');
   },
   sessionSave(d, f) {
@@ -466,6 +480,33 @@ const FORMS = {
 const normH = (s) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
 const xlDate = (v) => { if (/^\d+(\.\d+)?$/.test(v) && Number(v) > 20000) { const d = new Date(Math.round((Number(v) - 25569) * 86400000)); return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`; } const m = String(v).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); return m ? `${m[3]}-${pad(m[2])}-${pad(m[1])}` : v; };
 const xlTime = (v) => { if (/^0?\.\d+$/.test(v)) { const m = Math.round(Number(v) * 1440); return `${pad(Math.floor(m / 60))}:${pad(m % 60)}`; } const m = String(v).replace('h', ':').match(/^(\d{1,2}):?(\d{2})?$/); return m ? `${pad(m[1])}:${m[2] || '00'}` : v; };
+/* Fiches du personnel : valeurs acceptées sous forme de clé (« femme ») ou de libellé (« Femme ») */
+const fromMap = (map, v) => Object.keys(map).find((k) => normH(k) === normH(v) || normH(map[k]) === normH(v));
+function ficheErrors(r, key) {
+  const errs = [];
+  if (r.sexe && !fromMap(GENDERS, r.sexe)) errs.push('sexe invalide (homme ou femme)');
+  if (r.diplome && !fromMap(DIPLOMAS, r.diplome)) errs.push('diplôme inconnu');
+  if (r.date_entree) { r.date_entree = xlDate(r.date_entree); if (!/^\d{4}-\d{2}-\d{2}$/.test(r.date_entree)) errs.push('date d’entrée invalide'); }
+  if (key === 'personnel' && !fromMap(CATEGORIES, r.categorie)) errs.push('catégorie inconnue (enseignant, administration, technique ou ouvrier)');
+  return errs;
+}
+function ficheFields(r) {
+  return {
+    gender: r.sexe ? fromMap(GENDERS, r.sexe) || null : null,
+    diploma: r.diplome ? fromMap(DIPLOMAS, r.diplome) || null : null,
+    entry_date: r.date_entree || null,
+  };
+}
+function upsertPersonnel(r, report, i) {
+  const f = ficheFields(r);
+  const category = fromMap(CATEGORIES, r.categorie);
+  const o = { last_name: r.nom, first_name: r.prenom, grade: r.grade || null, department: r.departement || null, phone: r.telephone || null, category, ...f };
+  let ex = r.email ? DB.users.find((u) => u.email === r.email) : null;
+  if (!ex && !r.email) ex = DB.users.find((u) => !u.email && normH(u.last_name) === normH(r.nom) && normH(u.first_name) === normH(r.prenom) && (u.category || defaultCategory(u)) === category);
+  if (ex) { Object.assign(ex, o, r.email ? { email: r.email } : {}); report[i].result = 'mis à jour'; return; }
+  ins('users', { ...o, email: r.email || null, role: 'personnel', password_hash: '', must_change_password: false, failed_logins: 0, locked_until: null, last_login_at: null, active: true, quota_override: null, is_demo: false });
+  report[i].result = 'créé';
+}
 function runImport(key, matrix, { commit, sessionId }) {
   const type = IMPORTS[key];
   const mapH = (row) => { const idx = {}; const n = row.map(normH); for (const [k, al] of Object.entries(type.cols)) { const i = n.findIndex((h) => al.includes(h)); if (i >= 0) idx[k] = i; } return idx; };
@@ -480,6 +521,11 @@ function runImport(key, matrix, { commit, sessionId }) {
   const report = rows.map((r) => {
     const errors = type.req.filter((k) => !r[k]).map((k) => `${k} manquant`);
     if (!errors.length) {
+      if (key === 'personnel' || key === 'enseignants') errors.push(...ficheErrors(r, key));
+      if (key === 'personnel' && r.email) {
+        r.email = r.email.toLowerCase(); if (!isEmail(r.email)) errors.push('e-mail invalide');
+        const other = DB.users.find((u) => u.email === r.email); if (other && other.role !== 'personnel') errors.push('e-mail utilisé par un autre compte');
+      }
       if (key === 'enseignants') {
         r.email = r.email.toLowerCase(); if (!isEmail(r.email)) errors.push('e-mail invalide');
         if (r.quota && !/^\d+$/.test(r.quota)) errors.push('quota invalide');
@@ -508,9 +554,10 @@ function runImport(key, matrix, { commit, sessionId }) {
   if (commit && valid) {
     tx(() => {
       plan.forEach((r, i) => {
+        if (key === 'personnel') { upsertPersonnel(r, report, i); return; }
         if (key === 'enseignants') {
           const ex = DB.users.find((u) => u.email === r.email);
-          const o = { last_name: r.nom, first_name: r.prenom, grade: r.grade || null, department: r.departement || null, phone: r.telephone || null, quota_override: r.quota ? Number(r.quota) : null };
+          const o = { last_name: r.nom, first_name: r.prenom, grade: r.grade || null, department: r.departement || null, phone: r.telephone || null, quota_override: r.quota ? Number(r.quota) : null, ...ficheFields(r), category: 'enseignant' };
           if (ex) { Object.assign(ex, o); report[i].result = 'mis à jour'; } else { const p = tempPassword(); ins('users', { ...o, email: r.email, role: 'enseignant', password_hash: hashPassword(p), active: true, must_change_password: true, failed_logins: 0, locked_until: null, last_login_at: null, is_demo: false }); credentials.push({ name: `${r.nom} ${r.prenom}`, email: r.email, password: p }); report[i].result = 'créé'; }
         } else if (['matieres', 'classes', 'salles'].includes(key)) {
           const tbl = { matieres: 'subjects', classes: 'classes', salles: 'rooms' }[key];
@@ -644,6 +691,7 @@ const ACTS = {
   annDelete(el) { requireStaff(); tx(() => { rm('announcements', (a) => a.id === Number(el.dataset.id)); audit('annonce_supprimee', 'announcement', Number(el.dataset.id)); }); go('/annonces', 'Annonce supprimée.'); },
   userReset(el) {
     requireStaff(); const u = get('users', el.dataset.id); if (!canManage(u)) fail('Vous ne pouvez pas modifier ce compte.');
+    if (u.role === 'personnel' || !u.email) fail('Cette fiche n’a pas de compte de connexion. Ajoutez un e-mail et un rôle d’accès pour lui en créer un.');
     const p = tempPassword();
     tx(() => { Object.assign(u, { password_hash: hashPassword(p), must_change_password: true, failed_logins: 0, locked_until: null }); audit('mot_de_passe_reinitialise', 'user', u.id); });
     go(`/utilisateurs/${u.id}`, `Mot de passe réinitialisé. Mot de passe provisoire (affiché une seule fois) : ${p}`, 'warning');
